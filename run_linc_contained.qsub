@@ -1,0 +1,119 @@
+#!/bin/bash -eu
+#
+# Script to run the LINC pipeline on observation data.
+#
+# Use the following Torque parameters when this script is run as Torque job.
+
+#PBS -m abe
+#PBS -N LINC-test
+#PBS -l nodes=1:ppn=32
+#PBS -l walltime=36:00:00
+#PBS -k oe
+
+# Error function
+error()
+{
+  echo -e "ERROR: $@" >&2
+  exit 1
+}
+
+# Check input arguments
+[ $# -eq 2 ] || error "\
+Usage: ${0} <observation-id> <work-flow>
+    where <observation-id> is the ID of a given observation,
+    and <work-flow> is the name of the workflow.
+    Measurement Sets for the given Observation ID are searched for in the
+    directory '${LINC_DATA_DIR}'.
+    The currently supported workflows are: HBA_calibrator, and HBA_target."
+
+OBSID=${1}
+INPUT_DIR=${LINC_DATA_DIR}/${OBSID}
+OUTPUT_DIR=${LINC_WORKING_DIR}/${OBSID}
+TEMP_DIR=${TMPDIR:-/tmp}/${USER}/${OBSID}
+
+WORKFLOW=${2}
+WORKFLOW_DIR=${LINC_INSTALL_DIR}/workflows
+CWLFILE="${WORKFLOW_DIR}/${WORKFLOW}.cwl"
+
+# Check if there's a user-defined YAML-file in ${OUTPUT_DIR}. 
+# If not, use the default YAML-file in ${LINC_DATA_DIR}.
+YAMLFILE=${OUTPUT_DIR}.yaml
+[ -f ${YAMLFILE} ] || YAMLFILE=${INPUT_DIR}.YAML
+
+# Tar-ball that will contain all the log files produced by the pipeline
+LOGFILES=${OUTPUT_DIR}/logfiles.tar.gz
+
+# Increase open file limit to hardware limit
+ulimit -n $(ulimit -Hn)
+
+# Print all Torque variables
+echo -e "
+================  Torque variables  ================
+$(for s in ${!PBS@}; do echo "${s}=${!s}"; done)
+===================================================
+"
+
+# Show current shell ulimits
+echo -e "
+============  Current resource limits  ============
+$(ulimit -a)
+===================================================
+"
+
+# Tell user what variables will be used:
+echo -e "
+The LINC pipeline will run, using the following settings:
+  Input directory          : ${INPUT_DIR}
+  Input specification file : ${YAMLFILE}
+  Workflow definition file : ${CWLFILE}
+  Output directory         : ${OUTPUT_DIR}
+  Temporary directory      : ${TEMP_DIR}
+  Tar-ball of all log files: ${LOGFILES} 
+"
+
+# Check if directories and files actually exist. If not, bail out.
+[ -d ${INPUT_DIR} ] || error "Directory '${INPUT_DIR}' does not exist"
+[ -f ${CWLFILE} ] || error "Workflow file '${CWLFILE}' does not exist"
+[ -f ${YAMLFILE} ] || error "Input specification file '${YAMLFILE}' does not exist"
+
+# Add ${OUTPUT_DIR} to ${MOUNT_DIRS} if it is not contained in ${LINC_DATA_DIR}
+MOUNT_DIRS="${LINC_DATA_DIR},${LINC_INSTALL_DIR},${TEMP_DIR},/var/spool/torque/aux"
+
+SINGULARITY="singularity exec \
+  --bind ${MOUNT_DIRS} \
+  ${CWL_SINGULARITY_CACHE}/astronrd_linc.sif"
+
+# Command that will be used to run the CWL workflow
+# LINC will be run within the specified singularity image
+COMMAND="${SINGULARITY} \
+  cwltool \
+  --no-container \
+  --leave-tmpdir \
+  --debug \
+  --preserve-entire-environment \
+  --timestamps \
+  --outdir ${OUTPUT_DIR}/ \
+  --tmpdir-prefix ${TEMP_DIR}/ \
+  ${CWLFILE} \
+  ${YAMLFILE}"
+
+echo "${COMMAND}"
+
+# Execute command
+if ${COMMAND}
+then
+  echo -e "\nSUCCESS: Pipeline finished successfully\n"
+  exit 0
+else
+  STATUS=${?}
+  if [ -d ${TEMP_DIR} ]
+  then
+    # Create sorted list of contents of ${TEMP_DIR}
+    find ${TEMP_DIR} | sort > ${TEMP_DIR}/contents.log
+    # Save all log files for later inspection.
+    find ${TEMP_DIR} -name "*.log" -print0 | \
+      tar czf ${LOGFILES} --null -T -
+  fi
+  echo -e "\n**FAILURE**: Pipeline failed with exit status: ${STATUS}\n"
+  exit ${STATUS}
+fi
