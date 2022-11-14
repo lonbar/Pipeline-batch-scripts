@@ -29,3 +29,12 @@ If you instead want to run cwltool within a Singularity container, use the follo
 * `run_linc-cwltool_contained.sh` for SLURM.
 
 Again, you may need to tweak the directory binds.
+
+In the case the compute nodes do not have internet access it is possible to use cached singularity images by setting the following variables:
+```
+export SINGULARITY_CACHEDIR=<cache-dir>/images
+export SINGULARITY_TMPDIR=$SINGULARITY_CACHEDIR/tmp
+export SINGULARITY_PULLDIR=$SINGULARITY_CACHEDIR/pull
+export CWL_SINGULARITY_CACHE=$SINGULARITY_PULLDIR
+```
+Here, `<cache-dir>` is the preferred location to store the singularity images. The variable `$SINGULARITY_TMPDIR` is optional and avoids temporary mounting of the images in the /tmp-directory. 
